@@ -28,9 +28,9 @@ st.markdown("_Preserve what you thought then. Layer what you know now. Learn wit
 # Database connection
 @st.cache_resource
 def get_connection():
-    conn = sqlite3.connect("decisions.db", check_same_thread=False)
-    return conn
+    return sqlite3.connect("decisions.db", check_same_thread=False)
 
+import contextlib
 conn = get_connection()
 cursor = conn.cursor()
 
@@ -44,12 +44,9 @@ CREATE TABLE IF NOT EXISTS decisions (
 )
 """)
 # Add confidence column if not exists
-try:
+with contextlib.suppress(sqlite3.OperationalError):
     cursor.execute("ALTER TABLE decisions ADD COLUMN confidence INTEGER")
     print("Added confidence column")
-except sqlite3.OperationalError:
-    pass  # Column already exists
-
 # Tags tables (unchanged, safe)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS tags (
@@ -77,16 +74,11 @@ CREATE TABLE IF NOT EXISTS reflections (
 )
 """)
 # Add outcome_rating
-try:
+with contextlib.suppress(sqlite3.OperationalError):
     cursor.execute("ALTER TABLE reflections ADD COLUMN outcome_rating INTEGER")
-except sqlite3.OperationalError:
-    pass
 # Add reasoning_rating
-try:
+with contextlib.suppress(sqlite3.OperationalError):
     cursor.execute("ALTER TABLE reflections ADD COLUMN reasoning_rating INTEGER")
-except sqlite3.OperationalError:
-    pass
-
 conn.commit()
 
 # Predefined tags
@@ -130,13 +122,13 @@ if page == "Home/Dashboard":
 
     cursor.execute("SELECT COUNT(*) FROM decisions")
     total_decisions = cursor.fetchone()[0]
-    
+
     cursor.execute("SELECT COUNT(DISTINCT decision_id) FROM reflections")
     with_reflections = cursor.fetchone()[0]
-    
+
     cursor.execute("SELECT AVG(confidence) FROM decisions WHERE confidence IS NOT NULL")
     avg_confidence = cursor.fetchone()[0]
-    
+
     cursor.execute("SELECT AVG(outcome_rating) FROM reflections WHERE outcome_rating IS NOT NULL")
     avg_outcome = cursor.fetchone()[0]
 
@@ -167,7 +159,7 @@ if page == "Home/Dashboard":
         placeholders = ",".join(["?"] * len(selected_tags))
         query += f" AND t.name IN ({placeholders})"
         params.extend(selected_tags)
-    
+
     query += " ORDER BY d.timestamp DESC LIMIT 8"
     cursor.execute(query, params)
     recent = cursor.fetchall()
@@ -175,9 +167,6 @@ if page == "Home/Dashboard":
     for dec in recent:
         st.markdown(f"• **{dec[1]}** (ID: {dec[0]} — {dec[2][:10]})")
 
-# -----------------------------
-# Log Decision
-# -----------------------------
 elif page == "Log Decision":
     st.header("📝 Log a New Decision")
     with st.form("log_decision"):
@@ -185,9 +174,7 @@ elif page == "Log Decision":
         context = st.text_area("Context & Reasoning at the Time")
         confidence = st.slider("Confidence level at the time (1 = low, 10 = high)", 1, 10, 5)
         tags = st.multiselect("Tags", ALL_TAGS)
-        submitted = st.form_submit_button("Log Decision")
-
-        if submitted:
+        if submitted := st.form_submit_button("Log Decision"):
             if title and context:
                 ts = datetime.now().isoformat()
                 cursor.execute(
@@ -207,9 +194,6 @@ elif page == "Log Decision":
             else:
                 st.warning("Title and context required.")
 
-# -----------------------------
-# Add Reflection
-# -----------------------------
 elif page == "Add Reflection":
     st.header("✨ Add a Reflection")
     decision_id = st.number_input("Decision ID", min_value=1, step=1)
@@ -224,8 +208,7 @@ elif page == "Add Reflection":
 
         # Tags
         cursor.execute("""SELECT t.name FROM tags t JOIN decision_tags dt ON t.tag_id = dt.tag_id WHERE dt.decision_id = ?""", (decision_id,))
-        tags = [row[0] for row in cursor.fetchall()]
-        if tags:
+        if tags := [row[0] for row in cursor.fetchall()]:
             st.caption("🏷️ " + ", ".join(tags))
 
         # Guided prompts
@@ -264,9 +247,6 @@ elif page == "Add Reflection":
             else:
                 st.warning("Please fill both reflection fields.")
 
-# -----------------------------
-# Browse & Search
-# -----------------------------
 elif page == "Browse & Search":
     st.header("📋 Browse & Search Decisions")
 
@@ -291,9 +271,7 @@ elif page == "Browse & Search":
 
     query += " ORDER BY d.timestamp DESC"
     cursor.execute(query, params)
-    decisions = cursor.fetchall()
-
-    if decisions:
+    if decisions := cursor.fetchall():
         for dec in decisions:
             conf = dec[3] if dec[3] is not None else "—"
             with st.expander(f"{dec[1]} (ID: {dec[0]} • {dec[2][:10]} • Confidence: {conf}/10)"):
@@ -322,8 +300,7 @@ elif page == "Browse & Search":
 
                 # Reflections
                 cursor.execute("SELECT thought_now, difference, outcome_rating, reasoning_rating, timestamp FROM reflections WHERE decision_id=? ORDER BY timestamp", (dec[0],))
-                reflections = cursor.fetchall()
-                if reflections:
+                if reflections := cursor.fetchall():
                     st.write("**Reflections:**")
                     for ref in reflections:
                         st.caption(f"{ref[4][:10]} — Outcome: {ref[2]}/10 | Reasoning then: {ref[3]}/10")
@@ -334,9 +311,6 @@ elif page == "Browse & Search":
     else:
         st.info("No matching decisions. Try adjusting filters.")
 
-# -----------------------------
-# Timeline View
-# -----------------------------
 elif page == "Timeline View":
     st.header("⏳ Timeline of Your Thinking")
 
@@ -350,20 +324,18 @@ elif page == "Timeline View":
         LEFT JOIN tags t ON dt.tag_id = t.tag_id
         WHERE 1=1
         """
-        if search_query:
-            like = f"%{search_query}%"
-            query += " AND (d.title LIKE ? OR d.context LIKE ? OR t.name LIKE ?)"
-            params.extend([like]*3)
-        if selected_tags:
-            placeholders = ",".join(["?"] * len(selected_tags))
-            query += f" AND t.name IN ({placeholders})"
-            params.extend(selected_tags)
-    
+    if search_query:
+        like = f"%{search_query}%"
+        query += " AND (d.title LIKE ? OR d.context LIKE ? OR t.name LIKE ?)"
+        params.extend([like]*3)
+    if selected_tags:
+        placeholders = ",".join(["?"] * len(selected_tags))
+        query += f" AND t.name IN ({placeholders})"
+        params.extend(selected_tags)
+
     query += " ORDER BY timestamp ASC"
     cursor.execute(query, params)
-    decisions = cursor.fetchall()
-
-    if decisions:
+    if decisions := cursor.fetchall():
         for dec in decisions:
             date_str = dec[2][:10]
             with st.container():
@@ -372,9 +344,6 @@ elif page == "Timeline View":
     else:
         st.info("No decisions yet.")
 
-# -----------------------------
-# Export Data
-# -----------------------------
 else:  # Export Data
     st.header("💾 Export Your Journal")
 
@@ -427,5 +396,5 @@ else:  # Export Data
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Decision Journal** • Built with ❤️ in Durban • Pure Streamlit")
-st.sidebar.caption("Now with dashboard, scoring, guided prompts, timeline, export, and tag editing")
+st.sidebar.markdown("**Decision Journal** • Built with ❤️ by iKhaya AI")
+st.sidebar.caption("Wisdom is the art of learning from yesterday's choices to make better ones tomorrow.")
